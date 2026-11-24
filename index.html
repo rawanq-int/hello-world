@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hello World Printer</title>
+  <style>
+    :root {
+      --bg: #f6f5f1;
+      --panel: #ffffff;
+      --ink: #1b1b1a;
+      --muted: #6b6a66;
+      --line: #e4e2dc;
+      --accent: #1f5c4a;
+      --accent-ink: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141413;
+        --panel: #1d1d1b;
+        --ink: #f1efe9;
+        --muted: #9c9a93;
+        --line: #2e2d2a;
+        --accent: #5fb89b;
+        --accent-ink: #0f1f1a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex; justify-content: center; padding: 48px 16px;
+    }
+    main { width: 100%; max-width: 640px; }
+    h1 { font-size: 2rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+    p.lede { margin: 0 0 28px; color: var(--muted); }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    label { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+    input[type="number"], input[type="text"] {
+      font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px 12px; width: 110px;
+    }
+    input[type="text"] { width: 200px; }
+    button {
+      font: inherit; font-weight: 600; border-radius: 8px; padding: 10px 16px; cursor: pointer;
+      border: 1px solid var(--line); background: transparent; color: var(--ink);
+    }
+    button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    .stats { display: flex; justify-content: space-between; margin: 20px 0 8px; font-size: 0.85rem; color: var(--muted); }
+    #output {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.95rem;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+      height: 360px; overflow-y: auto; padding: 12px 16px; margin: 0; list-style: none;
+    }
+    #output li { padding: 3px 0; display: flex; gap: 14px; }
+    #output li .n { color: var(--muted); min-width: 3.5ch; text-align: right; }
+    #output li.new { animation: pop 0.35s ease-out; }
+    @keyframes pop { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+    .empty { color: var(--muted); padding: 3px 0; }
+    .hint { margin-top: 12px; font-size: 0.8rem; color: var(--muted); }
+    kbd { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Hello World Printer</h1>
+    <p class="lede">Choose how many times, then print.</p>
+
+    <div class="panel">
+      <div class="controls">
+        <label>Times
+          <input id="times" type="number" min="1" max="1000" value="5">
+        </label>
+        <label>Message
+          <input id="message" type="text" value="Hello World" maxlength="80">
+        </label>
+        <button id="print" class="primary">Print</button>
+        <button id="once">+1</button>
+        <button id="clear">Clear</button>
+      </div>
+      <div class="hint">Press <kbd>Enter</kbd> to print. Max 1,000 at a time.</div>
+    </div>
+
+    <div class="stats">
+      <span id="total">0 printed</span>
+      <span id="last"></span>
+    </div>
+    <ol id="output"><li class="empty">Nothing printed yet.</li></ol>
+  </main>
+
+  <script>
+    const out = document.getElementById('output');
+    const timesEl = document.getElementById('times');
+    const msgEl = document.getElementById('message');
+    const totalEl = document.getElementById('total');
+    const lastEl = document.getElementById('last');
+    let count = 0;
+
+    function render() {
+      totalEl.textContent = count.toLocaleString() + ' printed';
+    }
+
+    function print(times) {
+      const n = Math.max(1, Math.min(1000, Math.floor(Number(times)) || 1));
+      const msg = msgEl.value.trim() || 'Hello World';
+      if (count === 0) out.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < n; i++) {
+        count++;
+        const li = document.createElement('li');
+        li.className = 'new';
+        const num = document.createElement('span');
+        num.className = 'n';
+        num.textContent = count;
+        const text = document.createElement('span');
+        text.textContent = msg;
+        li.append(num, text);
+        frag.appendChild(li);
+      }
+      out.appendChild(frag);
+      out.scrollTop = out.scrollHeight;
+      lastEl.textContent = 'last batch: ' + n;
+      render();
+    }
+
+    document.getElementById('print').addEventListener('click', () => print(timesEl.value));
+    document.getElementById('once').addEventListener('click', () => print(1));
+    document.getElementById('clear').addEventListener('click', () => {
+      count = 0;
+      out.innerHTML = '<li class="empty">Nothing printed yet.</li>';
+      lastEl.textContent = '';
+      render();
+    });
+    [timesEl, msgEl].forEach(el => el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') print(timesEl.value);
+    }));
+  </script>
+</body>
+</html>
