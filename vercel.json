@@ -1,0 +1,5 @@
+{
+  "redirects": [
+    { "source": "/vessels/:path*", "destination": "/", "permanent": false }
+  ]
+}
