@@ -8,21 +8,13 @@ export default async function handler(req, res) {
   }
   if (!maradConfigured()) {
     return res.status(503).json({
-      error: 'Marad is not set up yet. Add MARAD_API_KEY and MARAD_VESSELS_URL in Vercel, then redeploy.',
+      error: 'Marad is not set up yet. Add MARAD_API_KEY in Vercel, then redeploy.',
     });
   }
   try {
-    const { vessels, withPosition, sampleFields } = await fetchVesselLocations();
-    const payload = { vessels, fetchedAt: new Date().toISOString() };
-    if (vessels.length > 0 && withPosition === 0) {
-      payload.warning = 'Marad returned vessels, but no positions were recognised.';
-      payload.fieldsSeen = sampleFields; // names only, to help map the format
-    }
-    return res.status(200).json(payload);
+    const { vessels } = await fetchVesselLocations();
+    return res.status(200).json({ vessels, fetchedAt: new Date().toISOString() });
   } catch (err) {
-    return res.status(502).json({
-      error: err.name === 'AbortError' ? 'Marad took too long to respond.' : err.message,
-      fieldsSeen: err.fields,
-    });
+    return res.status(502).json({ error: err.message, fieldsSeen: err.fields });
   }
 }

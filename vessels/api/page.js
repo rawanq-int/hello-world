@@ -53,8 +53,8 @@ function dashboardPage() {
   </div>
   <div class="card" style="padding:0; overflow-x:auto">
     <table>
-      <thead><tr><th>Vessel</th><th>IMO</th><th>Latitude</th><th>Longitude</th><th>Last update</th><th>Map</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      <thead><tr><th>Vessel</th><th>Number</th><th>Location</th><th>Map</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
     </table>
   </div>
   <p class="error" id="error" hidden></p>
@@ -64,15 +64,6 @@ function dashboardPage() {
   const statusEl = document.getElementById('status');
   const errorEl = document.getElementById('error');
 
-  function fmt(v, pos, neg) {
-    if (v === null || v === undefined) return '—';
-    return Math.abs(v).toFixed(4) + '° ' + (v >= 0 ? pos : neg);
-  }
-  function fmtTime(t) {
-    if (!t) return '—';
-    const d = new Date(t);
-    return isNaN(d) ? t : d.toLocaleString();
-  }
   function cell(text, cls) {
     const td = document.createElement('td');
     if (cls) td.className = cls;
@@ -90,11 +81,29 @@ function dashboardPage() {
       if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { fields: data.fieldsSeen });
       rows.innerHTML = '';
       if (!data.vessels.length) {
-        rows.innerHTML = '<tr><td colspan="6" class="muted">Marad returned no vessels.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="4" class="muted">Marad returned no vessels.</td></tr>';
       }
       for (const v of data.vessels) {
         const tr = document.createElement('tr');
-        tr.append(cell(v.name), cell(v.imo || '—', 'num'), cell(fmt(v.lat, 'N', 'S'), 'num'), cell(fmt(v.lon, 'E', 'W'), 'num'), cell(fmtTime(v.updated)));
+        tr.append(cell(v.name), cell(v.number || '—', 'num'));
+        const locTd = document.createElement('td');
+        if (v.error) {
+          locTd.textContent = 'Could not load: ' + v.error;
+          locTd.className = 'error';
+        } else if (!v.location.length) {
+          locTd.textContent = 'No location data in Marad';
+          locTd.className = 'muted';
+        } else {
+          for (const item of v.location) {
+            const line = document.createElement('div');
+            const label = document.createElement('span');
+            label.className = 'muted';
+            label.textContent = item.label + ': ';
+            line.append(label, document.createTextNode(item.value));
+            locTd.append(line);
+          }
+        }
+        tr.append(locTd);
         const mapTd = document.createElement('td');
         if (v.lat !== null) {
           const a = document.createElement('a');
@@ -106,12 +115,8 @@ function dashboardPage() {
         rows.append(tr);
       }
       statusEl.textContent = data.vessels.length + ' vessels · updated ' + new Date(data.fetchedAt).toLocaleTimeString();
-      if (data.warning) {
-        errorEl.textContent = data.warning + (data.fieldsSeen ? ' Fields Marad sent: ' + data.fieldsSeen.join(', ') : '');
-        errorEl.hidden = false;
-      }
     } catch (e) {
-      rows.innerHTML = '<tr><td colspan="6" class="muted">No data.</td></tr>';
+      rows.innerHTML = '<tr><td colspan="4" class="muted">No data.</td></tr>';
       statusEl.textContent = 'Could not load vessel locations';
       errorEl.textContent = e.message + (e.fields && e.fields.length ? ' Fields Marad sent: ' + e.fields.join(', ') : '');
       errorEl.hidden = false;
