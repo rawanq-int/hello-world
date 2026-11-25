@@ -68,6 +68,14 @@ async function maradGet(path) {
   return await res.json();
 }
 
+// Marad servers differ in field casing (name vs Name), so read fields case-insensitively.
+export function field(obj, key) {
+  if (!obj || typeof obj !== 'object') return undefined;
+  if (key in obj) return obj[key];
+  const k = Object.keys(obj).find((x) => x.toLowerCase() === key.toLowerCase());
+  return k === undefined ? undefined : obj[k];
+}
+
 // Parse "64.15", "-21.94", "64°08.5'N", "64 08 30 N", "S 4° 37.2'" into decimal degrees.
 export function parseCoordinate(raw, kind) {
   if (raw == null) return null;
@@ -157,9 +165,9 @@ export async function probeEndpoints() {
   }
 
   const list = await probe('GET /api/vessels/getVessels', '/api/vessels/getVessels');
-  const v = Array.isArray(list) ? list.find((x) => x && x.name) : null;
-  const vesselName = v?.name ?? null;
-  const vesselNumber = v?.number ?? null;
+  const v = Array.isArray(list) ? list.find((x) => field(x, 'name')) : null;
+  const vesselName = v ? field(v, 'name') : null;
+  const vesselNumber = v ? field(v, 'number') ?? null : null;
 
   let locationLabels = [];
   if (vesselName) {
@@ -168,7 +176,7 @@ export async function probeEndpoints() {
     const from = new Date(to.getTime() - 90 * 24 * 3600 * 1000);
     const loc = await probe('GET /api/LocationData', '/api/LocationData?' + q);
     // The "name" of each pair is a label (e.g. Latitude) and tells us which location fields exist.
-    if (Array.isArray(loc)) locationLabels = [...new Set(loc.map((e) => e && e.name).filter(Boolean))].slice(0, 40);
+    if (Array.isArray(loc)) locationLabels = [...new Set(loc.map((e) => field(e, 'name')).filter(Boolean))].slice(0, 40);
     await probe('GET /api/Voyages/GetVoyages (last 90 days)', `/api/Voyages/GetVoyages?${q}&startDate=${from.toISOString()}&endDate=${to.toISOString()}`);
     await probe('GET /api/Certificates', '/api/Certificates?' + q);
     await probe('GET /api/Components/GetVesselComponents', '/api/Components/GetVesselComponents?' + q);
@@ -199,13 +207,14 @@ export async function fetchVesselLocations() {
   }
 
   const vessels = await mapLimit(list, CONCURRENCY, async (v) => {
-    const name = v?.name ?? 'Unnamed vessel';
-    const number = v?.number ?? null;
+    const name = field(v, 'name') ?? 'Unnamed vessel';
+    const number = field(v, 'number') ?? null;
     try {
       const data = await maradGet('/api/LocationData?vesselName=' + encodeURIComponent(name));
       const entries = (Array.isArray(data) ? data : [])
-        .filter((e) => e && e.name && e.value != null && String(e.value).trim() !== '')
-        .map((e) => ({ label: String(e.name), value: String(e.value) }));
+        .map((e) => ({ label: field(e, 'name'), value: field(e, 'value') }))
+        .filter((e) => e.label && e.value != null && String(e.value).trim() !== '')
+        .map((e) => ({ label: String(e.label), value: String(e.value) }));
       const { lat, lon } = extractPosition(entries.map((e) => ({ name: e.label, value: e.value })));
       return { name, number, location: entries, lat, lon, error: null };
     } catch (err) {
