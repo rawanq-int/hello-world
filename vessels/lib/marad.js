@@ -93,6 +93,98 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+// Calls each relevant Marad endpoint once and reports only status, item count and
+// field names (never values), to see what this API key can reach.
+export async function probeEndpoints() {
+  const results = [];
+  const describe = (body) => {
+    if (Array.isArray(body)) {
+      const first = body.find((x) => x && typeof x === 'object');
+      return { count: body.length, fields: first ? Object.keys(first).slice(0, 25) : [] };
+    }
+    if (body && typeof body === 'object') return { count: null, fields: Object.keys(body).slice(0, 25) };
+    return { count: null, fields: [] };
+  };
+  const meaning = (status) =>
+    status === 200 ? 'works' :
+    status === 401 || status === 403 ? 'no access with this key' :
+    status === 404 ? 'not found' :
+    status === 400 ? 'reachable, but needs different parameters' :
+    `HTTP ${status}`;
+
+  async function probe(label, path) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(baseUrl() + path, {
+        headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      let info = { count: null, fields: [] };
+      if (res.ok) { try { info = describe(await res.json()); } catch { /* not JSON */ } }
+      const r = { endpoint: label, status: res.status, result: meaning(res.status), ...info };
+      results.push(r);
+      return res.ok ? r : null;
+    } catch (err) {
+      const reason = err.name === 'AbortError' ? 'timed out'
+        : (err.cause?.code || err.cause?.errors?.[0]?.code || err.cause?.message || err.message);
+      results.push({ endpoint: label, status: null, result: `could not connect (${reason})`, count: null, fields: [] });
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // The vessel list gives us a real vessel name/number for the per-vessel endpoints.
+  let vesselName = null;
+  let vesselNumber = null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const res = await fetch(baseUrl() + '/api/vessels/getVessels', {
+      headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+    if (res.ok) {
+      const list = await res.json();
+      const v = Array.isArray(list) ? list.find((x) => x && x.name) : null;
+      vesselName = v?.name ?? null;
+      vesselNumber = v?.number ?? null;
+    }
+  } catch { /* reported by the probe below */ }
+
+  await probe('GET /api/vessels/getVessels', '/api/vessels/getVessels');
+
+  let locationLabels = [];
+  if (vesselName) {
+    const q = 'vesselName=' + encodeURIComponent(vesselName);
+    const to = new Date();
+    const from = new Date(to.getTime() - 90 * 24 * 3600 * 1000);
+    // LocationData labels (the "name" of each pair) tell us which location fields exist.
+    try {
+      const res = await fetch(baseUrl() + '/api/LocationData?' + q, {
+        headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) locationLabels = [...new Set(data.map((e) => e && e.name).filter(Boolean))].slice(0, 40);
+      }
+    } catch { /* reported by the probe below */ }
+    await probe('GET /api/LocationData', '/api/LocationData?' + q);
+    await probe('GET /api/Voyages/GetVoyages (last 90 days)', `/api/Voyages/GetVoyages?${q}&startDate=${from.toISOString()}&endDate=${to.toISOString()}`);
+    await probe('GET /api/Certificates', '/api/Certificates?' + q);
+    await probe('GET /api/Components/GetVesselComponents', '/api/Components/GetVesselComponents?' + q);
+    await probe('GET /api/ComponentOperations', '/api/ComponentOperations?' + q);
+    await probe('GET /api/Parts/GetPartsPerVessel', '/api/Parts/GetPartsPerVessel?' + q);
+    await probe('GET /api/users/getusersonvessel/{vesselName}', '/api/users/getusersonvessel/' + encodeURIComponent(vesselName));
+    await probe('GET /api/Budgets/GetBudgets', `/api/Budgets/GetBudgets?year=${to.getFullYear()}&${q}`);
+    await probe('GET /api/Cashbook', '/api/Cashbook?' + q);
+    if (vesselNumber) await probe('GET /api/Checklist', '/api/Checklist?vesselNumber=' + encodeURIComponent(vesselNumber));
+  }
+
+  return { baseUrl: baseUrl(), testedWithAVessel: Boolean(vesselName), locationLabels, results };
+}
+
 export async function fetchVesselLocations() {
   const list = await maradGet('/api/vessels/getVessels');
   if (!Array.isArray(list)) {

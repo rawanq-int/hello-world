@@ -2,5 +2,8 @@
   "name": "vessel-locations",
   "private": true,
   "type": "module",
-  "engines": { "node": "22.x" }
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "build": "node scripts/probe.mjs || true"
+  }
 }
