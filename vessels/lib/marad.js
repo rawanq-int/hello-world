@@ -3,7 +3,7 @@
 //   GET /api/vessels/getVessels                  -> [{ number, name }]
 //   GET /api/LocationData?vesselName=<name>      -> [{ name, value, isFromTemplate }]
 
-const DEFAULT_BASE_URL = 'https://external.marad.ms';
+const DEFAULT_BASE_URL = 'https://deckoffice.marad.ms/ExternalApi'; // Rawanq's Marad (DeckOffice)
 const CONCURRENCY = 1; // Marad rate-limits; calls are also spaced by MIN_GAP_MS
 const TIMEOUT_MS = 15000;
 
