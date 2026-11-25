@@ -165,28 +165,68 @@ export async function probeEndpoints() {
   }
 
   const list = await probe('GET /api/vessels/getVessels', '/api/vessels/getVessels');
-  const v = Array.isArray(list) ? list.find((x) => field(x, 'name')) : null;
-  const vesselName = v ? field(v, 'name') : null;
-  const vesselNumber = v ? field(v, 'number') ?? null : null;
+  const vessels = Array.isArray(list) ? list.map((x) => field(x, 'name')).filter(Boolean) : [];
+  const vesselName = vessels[0] ?? null;
+
+  // Field names one level inside a wrapper like { Result, Data: [...] }.
+  const innerFields = (body) => {
+    const data = field(body, 'data');
+    const first = Array.isArray(data) ? data.find((x) => x && typeof x === 'object') : (data && typeof data === 'object' ? data : null);
+    return { innerCount: Array.isArray(data) ? data.length : null, innerFields: first ? Object.keys(first).slice(0, 40) : [], first };
+  };
 
   let locationLabels = [];
-  if (vesselName) {
-    const q = 'vesselName=' + encodeURIComponent(vesselName);
+  const locationSummary = { vesselsChecked: 0, vesselsWithData: 0 };
+  const voyageSummary = { vesselsChecked: 0, vesselsWithVoyages: 0, voyageFields: [], nestedFields: {} };
+  if (vessels.length) {
     const to = new Date();
-    const from = new Date(to.getTime() - 90 * 24 * 3600 * 1000);
-    const loc = await probe('GET /api/LocationData', '/api/LocationData?' + q);
-    // The "name" of each pair is a label (e.g. Latitude) and tells us which location fields exist.
-    if (Array.isArray(loc)) locationLabels = [...new Set(loc.map((e) => field(e, 'name')).filter(Boolean))].slice(0, 40);
-    await probe('GET /api/Voyages/GetVoyages (last 90 days)', `/api/Voyages/GetVoyages?${q}&startDate=${from.toISOString()}&endDate=${to.toISOString()}`);
-    await probe('GET /api/Certificates', '/api/Certificates?' + q);
-    await probe('GET /api/Components/GetVesselComponents', '/api/Components/GetVesselComponents?' + q);
-    await probe('GET /api/ComponentOperations', '/api/ComponentOperations?' + q);
-    await probe('GET /api/Parts/GetPartsPerVessel', '/api/Parts/GetPartsPerVessel?' + q);
-    await probe('GET /api/users/getusersonvessel/{vesselName}', '/api/users/getusersonvessel/' + encodeURIComponent(vesselName));
-    await probe('GET /api/Budgets/GetBudgets', `/api/Budgets/GetBudgets?year=${to.getFullYear()}&${q}`);
-    await probe('GET /api/Cashbook', '/api/Cashbook?' + q);
-    if (vesselNumber) await probe('GET /api/Checklist', '/api/Checklist?vesselNumber=' + encodeURIComponent(vesselNumber));
+    const from = new Date(to.getTime() - 365 * 24 * 3600 * 1000);
+    const labels = new Set();
+    for (const name of vessels) {
+      const q = 'vesselName=' + encodeURIComponent(name);
+      // LocationData: count vessels with entries and collect the entry labels (never values).
+      try {
+        const res = await maradFetch('/api/LocationData?' + q);
+        locationSummary.vesselsChecked++;
+        if (res.ok) {
+          const loc = await res.json();
+          if (Array.isArray(loc) && loc.length) {
+            locationSummary.vesselsWithData++;
+            loc.forEach((e) => { const l = field(e, 'name'); if (l) labels.add(String(l)); });
+          }
+        }
+      } catch { /* skip */ }
+      // Voyages: find the field names of a voyage record and of any nested objects.
+      if (!voyageSummary.voyageFields.length) {
+        try {
+          const res = await maradFetch(`/api/Voyages/GetVoyages?${q}&startDate=${from.toISOString()}&endDate=${to.toISOString()}`);
+          voyageSummary.vesselsChecked++;
+          if (res.ok) {
+            const { innerCount, innerFields: f, first } = innerFields(await res.json());
+            if (innerCount) {
+              voyageSummary.vesselsWithVoyages++;
+              voyageSummary.voyageFields = f;
+              for (const [k, v] of Object.entries(first || {})) {
+                const obj = Array.isArray(v) ? v.find((x) => x && typeof x === 'object') : v;
+                if (obj && typeof obj === 'object') voyageSummary.nestedFields[k] = Object.keys(obj).slice(0, 30);
+              }
+            }
+          }
+        } catch { /* skip */ }
+      }
+    }
+    locationLabels = [...labels].slice(0, 60);
+    results.push({ endpoint: 'GET /api/LocationData (all vessels)', status: null,
+      result: `${locationSummary.vesselsWithData} of ${locationSummary.vesselsChecked} vessels have entries`, count: null, fields: [] });
+    results.push({ endpoint: 'GET /api/Voyages/GetVoyages (last 365 days)', status: null,
+      result: voyageSummary.voyageFields.length ? `voyages found (checked ${voyageSummary.vesselsChecked} vessels)` : `no voyages found in ${voyageSummary.vesselsChecked} vessels`,
+      count: null, fields: voyageSummary.voyageFields });
+    for (const [k, f] of Object.entries(voyageSummary.nestedFields)) {
+      results.push({ endpoint: `  voyage.${k}`, status: null, result: 'nested fields', count: null, fields: f });
+    }
   }
+  const vesselNumber = null;
+  void vesselName; void vesselNumber;
 
   return {
     baseUrl: baseUrl(),

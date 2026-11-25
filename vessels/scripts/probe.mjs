@@ -12,7 +12,7 @@ try {
     for (const r of report.results) {
       const count = r.count != null ? ` | items: ${r.count}` : '';
       const fields = r.fields.length ? ` | fields: ${r.fields.join(', ')}` : '';
-      console.log(`[marad-probe] ${r.endpoint} -> ${r.status ?? '-'} ${r.result}${count}${fields}`);
+      console.log(`[marad-probe] ${r.endpoint} -> ${r.status ?? ''} ${r.result}${count}${fields}`.replace('->  ', '-> '));
     }
     const rl = Object.entries(report.rateLimitHeaders);
     if (rl.length) console.log('[marad-probe] Rate-limit headers: ' + rl.map(([k, v]) => `${k}=${v}`).join(', '));
