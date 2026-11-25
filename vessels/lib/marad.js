@@ -4,7 +4,7 @@
 //   GET /api/LocationData?vesselName=<name>      -> [{ name, value, isFromTemplate }]
 
 const DEFAULT_BASE_URL = 'https://external.marad.ms';
-const CONCURRENCY = 5;
+const CONCURRENCY = 1; // Marad rate-limits; calls are also spaced by MIN_GAP_MS
 const TIMEOUT_MS = 15000;
 
 export function maradConfigured() {
@@ -15,29 +15,57 @@ function baseUrl() {
   return (process.env.MARAD_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 
-async function maradGet(path) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(baseUrl() + path, {
-      headers: {
-        [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY,
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const err = new Error(`Marad responded with HTTP ${res.status} for ${path.split('?')[0]}`);
-      err.status = res.status;
-      throw err;
+const MIN_GAP_MS = Number(process.env.MARAD_MIN_GAP_MS || 400);
+let lastCallAt = 0;
+export const rateLimitInfo = {};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One Marad request: spaced at least MIN_GAP_MS apart, retried on HTTP 429.
+async function maradFetch(path, attempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const wait = lastCallAt + MIN_GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastCallAt = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(baseUrl() + path, {
+        headers: {
+          [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY,
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
     }
-    return await res.json();
+    for (const [k, v] of res.headers) {
+      if (/^(retry-after|x-rate-?limit|ratelimit)/i.test(k)) rateLimitInfo[k] = v;
+    }
+    if (res.status !== 429 || attempt >= attempts) return res;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 20) * 1000 : 1500 * attempt);
+  }
+}
+
+async function maradGet(path) {
+  let res;
+  try {
+    res = await maradFetch(path);
   } catch (err) {
     if (err.name === 'AbortError') throw new Error(`Marad took too long to respond for ${path.split('?')[0]}`);
     throw err;
-  } finally {
-    clearTimeout(timer);
   }
+  if (!res.ok) {
+    const err = new Error(res.status === 429
+      ? 'Marad is limiting requests right now (HTTP 429). Try Refresh in a minute.'
+      : `Marad responded with HTTP ${res.status} for ${path.split('?')[0]}`);
+    err.status = res.status;
+    throw err;
+  }
+  return await res.json();
 }
 
 // Parse "64.15", "-21.94", "64°08.5'N", "64 08 30 N", "S 4° 37.2'" into decimal degrees.
@@ -110,67 +138,37 @@ export async function probeEndpoints() {
     status === 401 || status === 403 ? 'no access with this key' :
     status === 404 ? 'not found' :
     status === 400 ? 'reachable, but needs different parameters' :
+    status === 429 ? 'rate limited (still after retries)' :
     `HTTP ${status}`;
 
   async function probe(label, path) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      const res = await fetch(baseUrl() + path, {
-        headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
-        signal: controller.signal,
-      });
-      let info = { count: null, fields: [] };
-      if (res.ok) { try { info = describe(await res.json()); } catch { /* not JSON */ } }
-      const r = { endpoint: label, status: res.status, result: meaning(res.status), ...info };
-      results.push(r);
-      return res.ok ? r : null;
+      const res = await maradFetch(path);
+      let body = null;
+      if (res.ok) { try { body = await res.json(); } catch { /* not JSON */ } }
+      results.push({ endpoint: label, status: res.status, result: meaning(res.status), ...describe(body) });
+      return res.ok ? body : null;
     } catch (err) {
       const reason = err.name === 'AbortError' ? 'timed out'
         : (err.cause?.code || err.cause?.errors?.[0]?.code || err.cause?.message || err.message);
       results.push({ endpoint: label, status: null, result: `could not connect (${reason})`, count: null, fields: [] });
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
-  // The vessel list gives us a real vessel name/number for the per-vessel endpoints.
-  let vesselName = null;
-  let vesselNumber = null;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    const res = await fetch(baseUrl() + '/api/vessels/getVessels', {
-      headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timer));
-    if (res.ok) {
-      const list = await res.json();
-      const v = Array.isArray(list) ? list.find((x) => x && x.name) : null;
-      vesselName = v?.name ?? null;
-      vesselNumber = v?.number ?? null;
-    }
-  } catch { /* reported by the probe below */ }
-
-  await probe('GET /api/vessels/getVessels', '/api/vessels/getVessels');
+  const list = await probe('GET /api/vessels/getVessels', '/api/vessels/getVessels');
+  const v = Array.isArray(list) ? list.find((x) => x && x.name) : null;
+  const vesselName = v?.name ?? null;
+  const vesselNumber = v?.number ?? null;
 
   let locationLabels = [];
   if (vesselName) {
     const q = 'vesselName=' + encodeURIComponent(vesselName);
     const to = new Date();
     const from = new Date(to.getTime() - 90 * 24 * 3600 * 1000);
-    // LocationData labels (the "name" of each pair) tell us which location fields exist.
-    try {
-      const res = await fetch(baseUrl() + '/api/LocationData?' + q, {
-        headers: { [process.env.MARAD_AUTH_HEADER || 'ApiKey']: process.env.MARAD_API_KEY, Accept: 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) locationLabels = [...new Set(data.map((e) => e && e.name).filter(Boolean))].slice(0, 40);
-      }
-    } catch { /* reported by the probe below */ }
-    await probe('GET /api/LocationData', '/api/LocationData?' + q);
+    const loc = await probe('GET /api/LocationData', '/api/LocationData?' + q);
+    // The "name" of each pair is a label (e.g. Latitude) and tells us which location fields exist.
+    if (Array.isArray(loc)) locationLabels = [...new Set(loc.map((e) => e && e.name).filter(Boolean))].slice(0, 40);
     await probe('GET /api/Voyages/GetVoyages (last 90 days)', `/api/Voyages/GetVoyages?${q}&startDate=${from.toISOString()}&endDate=${to.toISOString()}`);
     await probe('GET /api/Certificates', '/api/Certificates?' + q);
     await probe('GET /api/Components/GetVesselComponents', '/api/Components/GetVesselComponents?' + q);
@@ -182,7 +180,14 @@ export async function probeEndpoints() {
     if (vesselNumber) await probe('GET /api/Checklist', '/api/Checklist?vesselNumber=' + encodeURIComponent(vesselNumber));
   }
 
-  return { baseUrl: baseUrl(), testedWithAVessel: Boolean(vesselName), locationLabels, results };
+  return {
+    baseUrl: baseUrl(),
+    vesselCount: Array.isArray(list) ? list.length : null,
+    testedWithAVessel: Boolean(vesselName),
+    locationLabels,
+    rateLimitHeaders: { ...rateLimitInfo },
+    results,
+  };
 }
 
 export async function fetchVesselLocations() {

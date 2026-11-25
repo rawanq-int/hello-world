@@ -4,6 +4,6 @@
   "type": "module",
   "engines": { "node": "22.x" },
   "scripts": {
-    "build": "node scripts/probe.mjs || true"
+    "build": "node scripts/probe.mjs || true; mkdir -p public"
   }
 }

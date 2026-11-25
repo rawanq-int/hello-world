@@ -14,6 +14,8 @@ try {
       const fields = r.fields.length ? ` | fields: ${r.fields.join(', ')}` : '';
       console.log(`[marad-probe] ${r.endpoint} -> ${r.status ?? '-'} ${r.result}${count}${fields}`);
     }
+    const rl = Object.entries(report.rateLimitHeaders);
+    if (rl.length) console.log('[marad-probe] Rate-limit headers: ' + rl.map(([k, v]) => `${k}=${v}`).join(', '));
     if (report.locationLabels.length) {
       console.log(`[marad-probe] LocationData labels: ${report.locationLabels.join(', ')}`);
     }
